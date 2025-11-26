@@ -3,7 +3,85 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import requests
+# ===========================
+# CONFIGURACIÓN
+# ===========================
+# URL del backend Flask - CORREGIDO AL PUERTO CORRECTO
+API_URL = "http://localhost:5000"
 
+st.set_page_config(
+    page_title="Sistema IoT - Monitoreo de Gas", 
+    page_icon="🔐",
+    layout="wide"
+)
+
+# ===========================
+# VERIFICAR SI YA ESTÁ LOGUEADO
+# ===========================
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
+
+# ===========================
+# PÁGINA DE LOGIN
+# ===========================
+def pagina_login():
+    st.title("Iniciar :red[Sesión] 🔐")
+    st.write("Ingresa tu ID de usuario y contraseña para continuar.")
+    
+    # Formulario de login
+    with st.form("login_form"):
+        id_user = st.text_input("ID del Usuario", placeholder="Ejemplo: 1")
+        password = st.text_input("Contraseña", type="password")
+        submit = st.form_submit_button("Iniciar sesión", use_container_width=True)
+    
+    if submit:
+        if not id_user or not password:
+            st.warning("⚠️ Por favor completa todos los campos")
+            return
+        
+        # Petición POST al backend
+        try:
+            with st.spinner("Verificando credenciales..."):
+                response = requests.post(
+                    f"{API_URL}/login",
+                    json={"IDUser": id_user, "password": password},
+                    timeout=5
+                )
+            
+            data = response.json()
+            
+            if data.get("success"):
+                st.session_state["logged_in"] = True
+                st.session_state["id_user"] = data.get("usuario")
+                st.session_state["nombre_completo"] = data.get("nombre")
+                st.session_state["mail"] = data.get("mail")
+                st.session_state["id_device"] = data.get("id_device")
+                
+                st.success(f"✅ Bienvenido {data.get('nombre')} 🎉")
+                st.balloons()
+                st.rerun()
+            else:
+                st.error(f"❌ {data.get('message', 'Error de autenticación')}")
+        
+        except requests.exceptions.ConnectionError:
+            st.error("🔌 No se pudo conectar al servidor. Verifica que Flask esté corriendo en el puerto 5000")
+        except requests.exceptions.Timeout:
+            st.error("⏱️ Tiempo de espera agotado")
+        except Exception as e:
+            st.error(f"❌ Error: {str(e)}")
+    
+    # Información de ayuda
+    with st.expander("ℹ️ Ayuda"):
+        st.info("""
+        **¿No puedes iniciar sesión?**
+        
+        1. Verifica que el servidor Flask esté corriendo
+        2. Asegúrate de tener un usuario registrado en la base de datos
+        3. Verifica tu ID de usuario y contraseña
+        
+        **Crear usuario de prueba:** Ver archivo SQL incluido
+        """)
 
 # Configuración básica de la página
 st.set_page_config(
@@ -23,7 +101,7 @@ st.markdown("""
         font-size: 2.5rem;
         font-weight: bold;
         color: black;
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.2rem;
     }
     .emergency-card {
         background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
@@ -53,6 +131,8 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+st.image("Imagen de WhatsApp 2025-11-25 a las 07.44.11_472dd4f8 - Editado.png", width=400)
+st.sidebar.image("Imagen de WhatsApp 2025-11-25 a las 07.44.11_472dd4f8 - Editado.png", width=200)
 
 # Funciones para generar datos de ejemplo
 def generate_realtime_data():
@@ -102,9 +182,9 @@ def render_realtime_chart():
         y=data['value'],
         mode='lines',
         name='Medición',
-        line=dict(color='#3b82f6', width=3),
+        line=dict(color="#ec46d3", width=3),
         fill='tozeroy',
-        fillcolor='rgba(59, 130, 246, 0.1)'
+        fillcolor='rgba(255, 106, 160, 0.5)'
     ))
     
     fig.update_layout(
@@ -137,6 +217,157 @@ def render_gas_chart():
         st.markdown("### Consumo de Gas")
     with col2:
         view_mode = st.selectbox(
+            "Vista", 
+            ["Semanal", "Mensual"],
+            key='view_mode',
+            label_visibility="collapsed"
+        )
+    
+    current_mode = 'weekly' if view_mode == "Semanal" else 'monthly'
+    data = generate_gas_data(current_mode)
+    
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=data['label'],
+        y=data['consumption'],
+        marker_color="#e7b462",
+        marker_line_color="#E6C14A",
+        marker_line_width=1.5,
+        text=data['consumption'].round(1),
+        texttemplate='%{text}',
+        textposition='outside',
+        hovertemplate='<b>%{x}</b><br>Consumo: %{y:.1f} m³<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        height=350,
+        margin=dict(l=20, r=20, t=20, b=40),
+        xaxis=dict(
+            title="",
+            showgrid=False,
+            tickfont=dict(color='#000000'),
+        ),
+        yaxis=dict(
+            title=dict(text="Consumo (m³)", font=dict(color='#000000')),
+            showgrid=True,
+            gridcolor='#e5e7eb',
+            tickfont=dict(color='#000000'),
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        showlegend=False
+    )
+    
+    st.plotly_chart(fig, use_container_width=True, key="gas")
+    return current_mode
+
+
+
+# Resumen con métricas
+def render_weekly_summary(view_mode):
+    period = "Semanal" if view_mode == 'weekly' else "Mensual"
+    st.markdown(f"### Resumen {period}")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+         st.markdown("""
+        <div class="metric-card">
+            <p style="color: #6b7280; margin: 0; font-size: 0.9rem;">Pico Máximo</p>
+            <h2 style="margin: 10px 0; color: #1e293b;">42.3 m³</h2>
+            <p style="color: #ef4444; margin: 0; font-size: 0.85rem;">⚠️ Día viernes</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("""
+        <div class="metric-card">
+            <p style="color: #6b7280; margin: 0; font-size: 0.9rem;">Promedio Diario</p>
+            <h2 style="margin: 10px 0; color: #1e293b;">26.5 m³</h2>
+            <p style="color: #6b7280; margin: 0; font-size: 0.85rem;">Dentro del rango normal</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+
+# Contacto de emergencia
+def render_emergency_contact():
+    st.markdown("""
+    <div class="emergency-card">
+        <h3 style="margin-top: 0;">🚨 Contacto de Emergencia</h3>
+        <h1 style="font-size: 2.5rem; margin: 15px 0;">📞 911</h1>
+        <p style="margin-top: 15px; font-size: 1rem;">
+            En caso de fuga de gas o emergencia, llame inmediatamente.
+        </p>
+        <hr style="border-color: rgba(255,255,255,0.3); margin: 20px 0;">
+        <p style="margin: 10px 0; font-size: 0.95rem;">
+            <strong>⚠️ Señales de alerta:</strong>
+        </p>
+        <ul style="margin: 10px 0; padding-left: 20px;">
+            <li>Olor a gas o huevo podrido</li>
+            <li>Llama amarilla o naranja en lugar de azul</li>
+            <li>Manchas de hollín en electrodomésticos</li>
+            <li>Aire viciado o dificultad para respirar</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if st.button("🚨 Marcar Emergencia", type="primary", use_container_width=True):
+        st.warning("⚠️ En una emergencia real, marque 911 directamente desde su teléfono")
+
+# Mapa de ubicación
+def render_location_map():
+    st.markdown("### 📍 Ubicación del Medidor")
+    
+    # Coordenadas de ejemplo (Ciudad de México, El Pueblito, Querétaro, MX)
+    map_data = pd.DataFrame({
+        'lat': [20.5471],
+        'lon': [-100.4389]
+    })
+    
+    st.map(map_data, zoom=13, use_container_width=True)
+    
+    st.markdown("""
+    <div class="info-box">
+        <strong>📍 Dirección:</strong><br>
+        Av. Principal #123<br>
+        El Pueblito, Querétaro, México
+    </div>
+    """, unsafe_allow_html=True)
+
+# Aplicación principal
+def main():
+    # Header
+    render_header("María García")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Layout principal con columnas
+    col_main, col_side = st.columns([2, 1], gap="large")
+    
+    with col_main:
+        render_realtime_chart()
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        view_mode = render_gas_chart()
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        render_weekly_summary(view_mode)
+    
+    with col_side:
+        render_emergency_contact()
+        st.markdown("<br>", unsafe_allow_html=True)
+        render_location_map()
+    
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align: center; color: #6b7280; padding: 20px;">
+        <p>Dashboard de Monitoreo de Gas • Actualizado en tiempo real</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
             "Vista", 
             ["Semanal", "Mensual"],
             key='view_mode',
@@ -293,4 +524,5 @@ def main():
     """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
+
     main()
